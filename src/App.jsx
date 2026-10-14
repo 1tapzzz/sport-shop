@@ -1,13 +1,62 @@
 import React, { useEffect, useState } from "react";
+
 import {
   Routes,
   Route,
   Link,
-  useNavigate,
-  useLocation
+  useLocation,
 } from "react-router-dom";
 
-import { products, categories, slides } from "./data";
+import { categories, slides } from "./data";
+
+
+const API_URL = "http://127.0.0.1:8000/api";
+
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${API_URL}${path}`, {
+    credentials: "include",
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      ...(options.body
+        ? { "Content-Type": "application/json" }
+        : {}),
+    },
+  });
+
+  const data =
+    response.status === 204
+      ? null
+      : await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(
+      data?.detail || `Ошибка сервера: ${response.status}`
+    );
+  }
+
+  return data;
+}
+
+
+function formatPrice(value) {
+  return Number(value ?? 0).toLocaleString("ru-RU");
+}
+
+
+function normalizeProduct(product) {
+  return {
+    id: product.id,
+    name: product.title,
+    description: product.description,
+    price: Number(product.price),
+    image: product.image_url,
+    category: product.category || "Без категории",
+    badge: "",
+    oldPrice: null,
+  };
+}
 
 /* ================= HEADER ================= */
 
@@ -54,12 +103,16 @@ function Header({ cartCount }) {
             👤
           </Link>
 
-          <button className="icon-btn cart">
+          <Link
+            to="/cart"
+            className="icon-btn cart"
+            aria-label="Открыть корзину"
+          >
             🛒
             {cartCount > 0 && (
               <span className="cart-count">{cartCount}</span>
             )}
-          </button>
+          </Link>
 
           <button
             className="burger"
@@ -189,23 +242,31 @@ function Slider() {
 function ProductCard({ product, addToCart }) {
   return (
     <article className="product-card">
-
       <div className="product-image">
+        {product.image ? (
+          <img src={product.image} alt={product.name} />
+        ) : (
+          <div className="product-image-placeholder">
+            Изображение скоро появится
+          </div>
+        )}
 
-        <img src={product.image} alt={product.name} />
+        {product.badge && (
+          <span className="product-badge">
+            {product.badge}
+          </span>
+        )}
 
-        <span className="product-badge">
-          {product.badge}
-        </span>
-
-        <button className="favorite">
+        <button
+          type="button"
+          className="favorite"
+          aria-label="Добавить в избранное"
+        >
           ♡
         </button>
-
       </div>
 
       <div className="product-info">
-
         <div className="product-category">
           {product.category}
         </div>
@@ -213,36 +274,35 @@ function ProductCard({ product, addToCart }) {
         <h3>{product.name}</h3>
 
         <div className="rating">
-          ★★★★★
-          <span>4.9</span>
+          ★★★★★ <span>4.9</span>
         </div>
 
         <div className="price-row">
           <strong>
-            {product.price.toLocaleString()} ₽
+            {formatPrice(product.price)} ₽
           </strong>
 
-          <del>
-            {product.oldPrice.toLocaleString()} ₽
-          </del>
+          {product.oldPrice != null && (
+            <del>
+              {formatPrice(product.oldPrice)} ₽
+            </del>
+          )}
         </div>
 
         <button
+          type="button"
           className="add-cart"
           onClick={() => addToCart(product)}
         >
           В корзину
         </button>
-
       </div>
-
     </article>
   );
 }
-
 /* ================= HOME ================= */
 
-function Home({ addToCart }) {
+function Home({ addToCart, products }) {
   return (
     <>
       <Slider />
@@ -343,7 +403,7 @@ function Home({ addToCart }) {
 
 /* ================= CATALOG ================= */
 
-function Catalog({ addToCart }) {
+function Catalog({ addToCart, products }) {
   const [category, setCategory] = useState("Все");
   const [search, setSearch] = useState("");
 
@@ -420,6 +480,139 @@ function Catalog({ addToCart }) {
 
       </div>
 
+    </main>
+  );
+}
+
+/* ================= CART ================= */
+
+function CartPage({
+  cart,
+  onChangeQuantity,
+  onRemoveItem,
+  busyItemId,
+}) {
+  const items = cart?.items || [];
+
+  return (
+    <main className="container cart-page">
+      <div className="catalog-top">
+        <div>
+          <span className="section-label">SPORTZONE</span>
+          <h1>Корзина</h1>
+        </div>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="cart-empty">
+          <h2>Корзина пока пуста</h2>
+          <p>Добавь товары из нашего каталога.</p>
+
+          <Link to="/catalog" className="primary-btn">
+            Перейти в каталог
+          </Link>
+        </div>
+      ) : (
+        <div className="cart-layout">
+          <div className="cart-items">
+            {items.map((item) => (
+              <article className="cart-item" key={item.id}>
+                <div className="cart-item-image">
+                  {item.product.image_url ? (
+                    <img
+                      src={item.product.image_url}
+                      alt={item.product.title}
+                    />
+                  ) : (
+                    <span>Нет фото</span>
+                  )}
+                </div>
+
+                <div className="cart-item-details">
+                  <h3>{item.product.title}</h3>
+
+                  <p>
+                    {formatPrice(item.product.price)} ₽ за штуку
+                  </p>
+
+                  <div className="cart-controls">
+                    <button
+                      type="button"
+                      disabled={
+                        busyItemId === item.id ||
+                        item.quantity <= 1
+                      }
+                      onClick={() =>
+                        onChangeQuantity(
+                          item.id,
+                          item.quantity - 1
+                        )
+                      }
+                    >
+                      −
+                    </button>
+
+                    <span>{item.quantity}</span>
+
+                    <button
+                      type="button"
+                      disabled={busyItemId === item.id}
+                      onClick={() =>
+                        onChangeQuantity(
+                          item.id,
+                          item.quantity + 1
+                        )
+                      }
+                    >
+                      +
+                    </button>
+
+                    <button
+                      type="button"
+                      className="cart-remove"
+                      disabled={busyItemId === item.id}
+                      onClick={() => onRemoveItem(item.id)}
+                    >
+                      Удалить
+                    </button>
+                  </div>
+                </div>
+
+                <strong className="cart-item-total">
+                  {formatPrice(item.line_total)} ₽
+                </strong>
+              </article>
+            ))}
+          </div>
+
+          <aside className="cart-summary">
+            <h2>Ваш заказ</h2>
+
+            <p>Количество товаров: {cart.count}</p>
+
+            <div className="cart-total-row">
+              <span>Итого</span>
+              <strong>{formatPrice(cart.total)} ₽</strong>
+            </div>
+
+            <button
+              type="button"
+              className="primary-btn full"
+              onClick={() =>
+                alert(
+                  "Оформление заказа подключим следующим этапом."
+                )
+              }
+            >
+              Оформить заказ
+            </button>
+
+            <Link to="/catalog" className="more-link">
+              Продолжить покупки
+            </Link>
+          </aside>
+        </div>
+      )}
     </main>
   );
 }
@@ -527,32 +720,149 @@ function Profile() {
 /* ================= APP ================= */
 
 export default function App() {
-  const [cart, setCart] = useState([]);
+  const [products, setProducts] = useState([]);
 
-  const addToCart = (product) => {
-    setCart((prev) => [...prev, product]);
+  const [cart, setCart] = useState({
+    items: [],
+    count: 0,
+    total: "0.00",
+  });
 
-    alert(`${product.name} добавлен в корзину`);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busyItemId, setBusyItemId] = useState(null);
+
+  // Загружаем товары и корзину из Django.
+  useEffect(() => {
+    async function loadData() {
+      try {
+        setLoading(true);
+        setError("");
+
+        const [productData, cartData] = await Promise.all([
+          apiRequest("/products/"),
+          apiRequest("/cart/"),
+        ]);
+
+        setProducts(productData.map(normalizeProduct));
+        setCart(cartData);
+      } catch (err) {
+        setError(
+          "Не удалось подключиться к Django: " + err.message
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadData();
+  }, []);
+
+  // Добавляем товар в корзину.
+  const addToCart = async (product) => {
+    try {
+      const updatedCart = await apiRequest("/cart/items/", {
+        method: "POST",
+        body: JSON.stringify({
+          product_id: product.id,
+          quantity: 1,
+        }),
+      });
+
+      setCart(updatedCart);
+      alert(`${product.name} добавлен в корзину`);
+    } catch (err) {
+      alert("Не удалось добавить товар: " + err.message);
+    }
+  };
+
+  // Изменяем количество товара.
+  const changeCartQuantity = async (itemId, quantity) => {
+    try {
+      setBusyItemId(itemId);
+
+      const updatedCart = await apiRequest(
+        `/cart/items/${itemId}/`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ quantity }),
+        }
+      );
+
+      setCart(updatedCart);
+    } catch (err) {
+      alert("Не удалось изменить количество: " + err.message);
+    } finally {
+      setBusyItemId(null);
+    }
+  };
+
+  // Удаляем товар.
+  const removeFromCart = async (itemId) => {
+    try {
+      setBusyItemId(itemId);
+
+      const updatedCart = await apiRequest(
+        `/cart/items/${itemId}/`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      setCart(updatedCart);
+    } catch (err) {
+      alert("Не удалось удалить товар: " + err.message);
+    } finally {
+      setBusyItemId(null);
+    }
   };
 
   return (
     <div className="app">
+      <Header cartCount={cart.count} />
 
-      <Header cartCount={cart.length} />
+      {loading && (
+        <div className="container api-status">
+          Загружаем товары...
+        </div>
+      )}
+
+      {error && (
+        <div className="container api-status api-error" role="alert">
+          {error}
+        </div>
+      )}
 
       <Routes>
-
         <Route
           path="/"
           element={
-            <Home addToCart={addToCart} />
+            <Home
+              products={products}
+              addToCart={addToCart}
+            />
           }
         />
 
         <Route
           path="/catalog"
           element={
-            <Catalog addToCart={addToCart} />
+            <Catalog
+              products={products}
+              addToCart={addToCart}
+            />
+          }
+        />
+
+        <Route
+          path="/cart"
+          element={
+            <CartPage
+              cart={cart}
+              onChangeQuantity={changeCartQuantity}
+              onRemoveItem={removeFromCart}
+              busyItemId={busyItemId}
+            />
           }
         />
 
@@ -560,11 +870,9 @@ export default function App() {
           path="/profile"
           element={<Profile />}
         />
-
       </Routes>
 
       <Footer />
-
     </div>
   );
 }
