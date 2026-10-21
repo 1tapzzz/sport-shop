@@ -10,19 +10,53 @@ import {
 import { categories, slides } from "./data";
 
 
-const API_URL = "http://127.0.0.1:8000/api";
+const API_URL = "http://localhost:8000/api";
+
+
+function getCookie(name) {
+  const cookies = document.cookie
+    ? document.cookie.split(";")
+    : [];
+
+  for (const cookie of cookies) {
+    const value = cookie.trim();
+
+    if (value.startsWith(`${name}=`)) {
+      return decodeURIComponent(
+        value.substring(name.length + 1)
+      );
+    }
+  }
+
+  return null;
+}
 
 
 async function apiRequest(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const csrfToken = getCookie("csrftoken");
+
+  const headers = {
+    ...(options.headers || {}),
+  };
+
+  if (options.body) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  // Для запросов, изменяющих данные, передаём CSRF-токен.
+  if (
+    !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method) &&
+    csrfToken
+  ) {
+    headers["X-CSRFToken"] = csrfToken;
+  }
+
   const response = await fetch(`${API_URL}${path}`, {
-    credentials: "include",
     ...options,
-    headers: {
-      ...(options.headers || {}),
-      ...(options.body
-        ? { "Content-Type": "application/json" }
-        : {}),
-    },
+    method,
+    credentials: "include",
+    headers,
   });
 
   const data =
@@ -38,7 +72,6 @@ async function apiRequest(path, options = {}) {
 
   return data;
 }
-
 
 function formatPrice(value) {
   return Number(value ?? 0).toLocaleString("ru-RU");
@@ -507,7 +540,6 @@ function CartPage({
         <div className="cart-empty">
           <h2>Корзина пока пуста</h2>
           <p>Добавь товары из нашего каталога.</p>
-
           <Link to="/catalog" className="primary-btn">
             Перейти в каталог
           </Link>
@@ -530,43 +562,24 @@ function CartPage({
 
                 <div className="cart-item-details">
                   <h3>{item.product.title}</h3>
-
-                  <p>
-                    {formatPrice(item.product.price)} ₽ за штуку
-                  </p>
+                  <p>{formatPrice(item.product.price)} ₽ за штуку</p>
 
                   <div className="cart-controls">
                     <button
                       type="button"
-                      disabled={
-                        busyItemId === item.id ||
-                        item.quantity <= 1
-                      }
-                      onClick={() =>
-                        onChangeQuantity(
-                          item.id,
-                          item.quantity - 1
-                        )
-                      }
+                      disabled={busyItemId === item.id || item.quantity <= 1}
+                      onClick={() => onChangeQuantity(item.id, item.quantity - 1)}
                     >
                       −
                     </button>
-
                     <span>{item.quantity}</span>
-
                     <button
                       type="button"
                       disabled={busyItemId === item.id}
-                      onClick={() =>
-                        onChangeQuantity(
-                          item.id,
-                          item.quantity + 1
-                        )
-                      }
+                      onClick={() => onChangeQuantity(item.id, item.quantity + 1)}
                     >
                       +
                     </button>
-
                     <button
                       type="button"
                       className="cart-remove"
@@ -587,26 +600,18 @@ function CartPage({
 
           <aside className="cart-summary">
             <h2>Ваш заказ</h2>
-
             <p>Количество товаров: {cart.count}</p>
-
             <div className="cart-total-row">
               <span>Итого</span>
               <strong>{formatPrice(cart.total)} ₽</strong>
             </div>
-
             <button
               type="button"
               className="primary-btn full"
-              onClick={() =>
-                alert(
-                  "Оформление заказа подключим следующим этапом."
-                )
-              }
+              onClick={() => alert("Оформление заказа подключим следующим этапом.")}
             >
               Оформить заказ
             </button>
-
             <Link to="/catalog" className="more-link">
               Продолжить покупки
             </Link>
@@ -619,35 +624,145 @@ function CartPage({
 
 /* ================= AUTH ================= */
 
-function Profile() {
+function Profile({ onAuthChange }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [user, setUser] = useState(null);
+  const [checkingProfile, setCheckingProfile] = useState(true);
 
-  const handleSubmit = (e) => {
+  // При открытии профиля проверяем, сохранился ли вход на сервере.
+  useEffect(() => {
+    let active = true;
+
+    apiRequest("/auth/profile/")
+      .then((data) => {
+        if (active && data.is_authenticated) {
+          setUser(data.user);
+        }
+      })
+      .catch((err) => {
+        if (active) {
+          setError("Не удалось проверить профиль: " + err.message);
+        }
+      })
+      .finally(() => {
+        if (active) setCheckingProfile(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setMessage("");
+    setError("");
 
-    alert(
-      mode === "login"
-        ? "Вы успешно вошли!"
-        : "Аккаунт создан!"
-    );
+    try {
+      setSubmitting(true);
+
+      const isLogin = mode === "login";
+      const data = await apiRequest(
+        isLogin ? "/auth/login/" : "/auth/register/",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            email: email.trim(),
+            password,
+          }),
+        }
+      );
+
+      setMessage(
+        data.message ||
+          (isLogin ? "Вход выполнен успешно!" : "Регистрация прошла успешно!")
+      );
+      setPassword("");
+
+      const profileData = await apiRequest("/auth/profile/");
+
+      if (profileData.is_authenticated) {
+        setUser(profileData.user);
+        onAuthChange(true);
+      } else {
+        setMode("login");
+      }
+    } catch (err) {
+      setError(
+        err.message ||
+          (mode === "login"
+            ? "Не удалось войти в аккаунт."
+            : "Не удалось зарегистрироваться.")
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
+
+  const handleLogout = async () => {
+    setError("");
+    setMessage("");
+    setSubmitting(true);
+
+    try {
+      const data = await apiRequest("/auth/logout/", { method: "POST" });
+      setUser(null);
+      setMode("login");
+      onAuthChange(false);
+      setMessage(data.message || "Вы вышли из аккаунта.");
+      setPassword("");
+    } catch (err) {
+      setError(err.message || "Не удалось выйти из аккаунта.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (checkingProfile) {
+    return (
+      <main className="auth-page">
+        <div className="auth-card">
+          <p className="auth-description">Проверяем аккаунт...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (user) {
+    return (
+      <main className="auth-page">
+        <div className="auth-card">
+          <div className="auth-icon">👤</div>
+          <h1>Личный кабинет</h1>
+          <p className="auth-description">Вы вошли в аккаунт SPORTZONE</p>
+          <p><strong>Email:</strong> {user.email}</p>
+          {error && (
+            <p role="alert" style={{ color: "#d32f2f" }}>{error}</p>
+          )}
+          <button
+            type="button"
+            className="primary-btn full"
+            onClick={handleLogout}
+            disabled={submitting}
+          >
+            {submitting ? "Подождите..." : "Выйти из аккаунта"}
+          </button>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="auth-page">
-
       <div className="auth-card">
+        <div className="auth-icon">👤</div>
 
-        <div className="auth-icon">
-          👤
-        </div>
-
-        <h1>
-          {mode === "login"
-            ? "Вход"
-            : "Регистрация"}
-        </h1>
+        <h1>{mode === "login" ? "Вход" : "Регистрация"}</h1>
 
         <p className="auth-description">
           {mode === "login"
@@ -656,110 +771,162 @@ function Profile() {
         </p>
 
         <form onSubmit={handleSubmit}>
-
           <label>Email</label>
-
           <input
             type="email"
             placeholder="example@mail.ru"
             value={email}
-            onChange={(e) =>
-              setEmail(e.target.value)
-            }
+            onChange={(e) => setEmail(e.target.value)}
             required
           />
 
           <label>Пароль</label>
-
           <input
             type="password"
-            placeholder="Введите пароль"
+            placeholder="Минимум 8 символов"
             value={password}
-            onChange={(e) =>
-              setPassword(e.target.value)
-            }
+            onChange={(e) => setPassword(e.target.value)}
+            minLength={8}
             required
           />
 
-          <button className="primary-btn full">
-            {mode === "login"
-              ? "Войти"
-              : "Создать аккаунт"}
-          </button>
+          {error && (
+            <p role="alert" style={{ color: "#d32f2f" }}>
+              {error}
+            </p>
+          )}
 
+          {message && (
+            <p role="status" style={{ color: "#218838" }}>
+              {message}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            className="primary-btn full"
+            disabled={submitting}
+          >
+            {submitting
+              ? "Подождите..."
+              : mode === "login"
+                ? "Войти"
+                : "Создать аккаунт"}
+          </button>
         </form>
 
         <div className="auth-switch">
-
-          {mode === "login"
-            ? "Нет аккаунта?"
-            : "Уже есть аккаунт?"}
-
+          {mode === "login" ? "Нет аккаунта?" : "Уже есть аккаунт?"}
           <button
-            onClick={() =>
-              setMode(
-                mode === "login"
-                  ? "register"
-                  : "login"
-              )
-            }
+            type="button"
+            onClick={() => {
+              setMode(mode === "login" ? "register" : "login");
+              setError("");
+              setMessage("");
+            }}
           >
-            {mode === "login"
-              ? "Зарегистрироваться"
-              : "Войти"}
+            {mode === "login" ? "Зарегистрироваться" : "Войти"}
           </button>
-
         </div>
-
       </div>
-
     </main>
   );
 }
 
 /* ================= APP ================= */
 
+
 export default function App() {
   const [products, setProducts] = useState([]);
-
   const [cart, setCart] = useState({
     items: [],
     count: 0,
     total: "0.00",
   });
-
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busyItemId, setBusyItemId] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
 
-  // Загружаем товары и корзину из Django.
+  // Загружаем товары и проверяем авторизацию.
   useEffect(() => {
+    let active = true;
+
     async function loadData() {
+      setLoading(true);
+      setError("");
+
       try {
-        setLoading(true);
-        setError("");
-
-        const [productData, cartData] = await Promise.all([
-          apiRequest("/products/"),
-          apiRequest("/cart/"),
-        ]);
-
-        setProducts(productData.map(normalizeProduct));
-        setCart(cartData);
+        const productData = await apiRequest("/products/");
+        if (active) {
+          setProducts(productData.map(normalizeProduct));
+        }
       } catch (err) {
-        setError(
-          "Не удалось подключиться к Django: " + err.message
-        );
+        if (active) {
+          setError("Не удалось загрузить товары: " + err.message);
+        }
+      }
+
+      try {
+        const profileData = await apiRequest("/auth/profile/");
+        const loggedIn = Boolean(profileData.is_authenticated);
+
+        if (active) {
+          setIsAuthenticated(loggedIn);
+          setAuthChecked(true);
+        }
+
+        // Корзину загружаем только для вошедшего пользователя.
+        if (loggedIn) {
+          const cartData = await apiRequest("/cart/");
+          if (active) setCart(cartData);
+        } else if (active) {
+          setCart({ items: [], count: 0, total: "0.00" });
+        }
+      } catch (err) {
+        if (active) {
+          setCart({ items: [], count: 0, total: "0.00" });
+          // Не показываем гостю техническую ошибку авторизации.
+          console.info("Корзина недоступна без входа в аккаунт.");
+        }
       } finally {
-        setLoading(false);
+        if (active) {
+          setAuthChecked(true);
+          setLoading(false);
+        }
       }
     }
 
     loadData();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // Добавляем товар в корзину.
+  // Обновляем состояние после входа или выхода в профиле.
+  const handleAuthChange = (loggedIn) => {
+    setIsAuthenticated(loggedIn);
+
+    if (!loggedIn) {
+      setCart({ items: [], count: 0, total: "0.00" });
+    } else {
+      apiRequest("/cart/")
+        .then((data) => setCart(data))
+        .catch(() => {
+          setCart({ items: [], count: 0, total: "0.00" });
+        });
+    }
+  };
+
+  // Добавление товара.
   const addToCart = async (product) => {
+    if (!isAuthenticated) {
+      alert("Войдите в аккаунт, чтобы добавлять товары в корзину.");
+      return;
+    }
+
     try {
       const updatedCart = await apiRequest("/cart/items/", {
         method: "POST",
@@ -772,11 +939,13 @@ export default function App() {
       setCart(updatedCart);
       alert(`${product.name} добавлен в корзину`);
     } catch (err) {
-      alert("Не удалось добавить товар: " + err.message);
+      alert(
+        "Не удалось добавить товар. Проверьте, что вы вошли в аккаунт."
+      );
     }
   };
 
-  // Изменяем количество товара.
+  // Изменение количества.
   const changeCartQuantity = async (itemId, quantity) => {
     try {
       setBusyItemId(itemId);
@@ -791,27 +960,25 @@ export default function App() {
 
       setCart(updatedCart);
     } catch (err) {
-      alert("Не удалось изменить количество: " + err.message);
+      alert("Не удалось изменить количество. Проверьте вход в аккаунт.");
     } finally {
       setBusyItemId(null);
     }
   };
 
-  // Удаляем товар.
+  // Удаление товара.
   const removeFromCart = async (itemId) => {
     try {
       setBusyItemId(itemId);
 
       const updatedCart = await apiRequest(
         `/cart/items/${itemId}/`,
-        {
-          method: "DELETE",
-        }
+        { method: "DELETE" }
       );
 
       setCart(updatedCart);
     } catch (err) {
-      alert("Не удалось удалить товар: " + err.message);
+      alert("Не удалось удалить товар. Проверьте вход в аккаунт.");
     } finally {
       setBusyItemId(null);
     }
@@ -819,7 +986,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <Header cartCount={cart.count} />
+      <Header cartCount={isAuthenticated ? cart.count : 0} />
 
       {loading && (
         <div className="container api-status">
@@ -859,6 +1026,7 @@ export default function App() {
           element={
             <CartPage
               cart={cart}
+              isAuthenticated={authChecked && isAuthenticated}
               onChangeQuantity={changeCartQuantity}
               onRemoveItem={removeFromCart}
               busyItemId={busyItemId}
@@ -868,7 +1036,9 @@ export default function App() {
 
         <Route
           path="/profile"
-          element={<Profile />}
+          element={
+            <Profile onAuthChange={handleAuthChange} />
+          }
         />
       </Routes>
 

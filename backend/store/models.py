@@ -31,11 +31,22 @@ class Product(models.Model):
         verbose_name_plural = "Товары"
 
 
+
 class Cart(models.Model):
+    user = models.OneToOneField(
+        "auth.User",
+        on_delete=models.CASCADE,
+        related_name="cart",
+        null=True,
+        blank=True,
+        verbose_name="Пользователь",
+    )
     session_key = models.CharField(
         "Ключ сессии",
         max_length=40,
         unique=True,
+        null=True,
+        blank=True,
     )
     created_at = models.DateTimeField(
         "Создана",
@@ -47,12 +58,13 @@ class Cart(models.Model):
     )
 
     def __str__(self):
+        if self.user:
+            return f"Корзина пользователя {self.user}"
         return f"Корзина №{self.id}"
 
     class Meta:
         verbose_name = "Корзина"
         verbose_name_plural = "Корзины"
-
 
 class CartItem(models.Model):
     cart = models.ForeignKey(

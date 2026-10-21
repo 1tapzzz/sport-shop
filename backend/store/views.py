@@ -5,19 +5,21 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Product, Cart, CartItem
-from .serializers import ProductSerializer, CartSerializer
+from .serializers import (
+    ProductSerializer,
+    CartSerializer,
+    RegisterSerializer,
+)
 
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+
+from django.contrib.auth import login, authenticate
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
 def get_or_create_cart(request):
-    # Получаем сессию посетителя.
-    if not request.session.session_key:
-        request.session.create()
-
-    # Находим корзину посетителя или создаём новую.
-    cart, _ = Cart.objects.get_or_create(
-        session_key=request.session.session_key
-    )
-    return cart
+    return Cart.objects.get_or_create(user=request.user)[0]
 
 
 class ProductListView(generics.ListAPIView):
@@ -25,7 +27,10 @@ class ProductListView(generics.ListAPIView):
     serializer_class = ProductSerializer
 
 
+@method_decorator(ensure_csrf_cookie, name="dispatch")
 class CartView(APIView):
+    permission_classes = [IsAuthenticated]
+
     # Получение корзины.
     def get(self, request):
         cart = get_or_create_cart(request)
@@ -33,6 +38,8 @@ class CartView(APIView):
 
 
 class CartItemAddView(APIView):
+    permission_classes = [IsAuthenticated]
+
     # Добавление товара.
     def post(self, request):
         try:
@@ -75,6 +82,8 @@ class CartItemAddView(APIView):
 
 
 class CartItemDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
     # Изменение количества существующей позиции.
     def patch(self, request, item_id):
         cart = get_or_create_cart(request)
@@ -114,3 +123,94 @@ class CartItemDetailView(APIView):
         item.delete()
 
         return Response(CartSerializer(cart).data)
+
+
+class RegisterView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+
+        login(request, user)
+
+        return Response(
+            {
+                "message": "Регистрация прошла успешно!",
+                "user": {
+                    "id": user.id,
+                    "email": user.email,
+                    "username": user.username,
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email", "").strip().lower()
+        password = request.data.get("password", "")
+
+        if not email or not password:
+            return Response(
+                {"detail": "Введи email и пароль."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # При регистрации username создаётся равным email.
+        user = authenticate(
+            request,
+            username=email,
+            password=password,
+        )
+
+        if user is None:
+            return Response(
+                {"detail": "Неверный email или пароль."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        login(request, user)
+
+        return Response({
+            "message": "Вход выполнен успешно!",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "username": user.username,
+            },
+        })
+
+from django.contrib.auth import logout
+
+
+class ProfileView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        if not request.user.is_authenticated:
+            return Response({"is_authenticated": False})
+
+        return Response({
+            "is_authenticated": True,
+            "user": {
+                "id": request.user.id,
+                "email": request.user.email,
+                "username": request.user.username,
+            },
+        })
+
+
+class LogoutView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        logout(request)
+        return Response({
+            "message": "Вы вышли из аккаунта.",
+            "is_authenticated": False,
+        })

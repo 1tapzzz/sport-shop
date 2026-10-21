@@ -50,3 +50,36 @@ class CartSerializer(serializers.ModelSerializer):
 
     def get_count(self, obj):
         return sum(item.quantity for item in obj.items.all())
+
+
+from django.contrib.auth import get_user_model
+
+
+User = get_user_model()
+
+
+class RegisterSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(
+        write_only=True,
+        min_length=8,
+    )
+
+    def validate_email(self, value):
+        value = value.strip().lower()
+
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError(
+                "Пользователь с такой почтой уже зарегистрирован."
+            )
+
+        return value
+
+    def create(self, validated_data):
+        email = validated_data["email"]
+
+        return User.objects.create_user(
+            username=email,
+            email=email,
+            password=validated_data["password"],
+        )
