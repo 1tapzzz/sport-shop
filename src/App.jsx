@@ -524,8 +524,42 @@ function CartPage({
   onChangeQuantity,
   onRemoveItem,
   busyItemId,
+  isAuthenticated,
+  onCheckout,
 }) {
   const items = cart?.items || [];
+  const [fullName, setFullName] = useState("");
+  const [address, setAddress] = useState("");
+  const [paymentResult, setPaymentResult] = useState("success");
+  const [checkoutError, setCheckoutError] = useState("");
+  const [checkoutMessage, setCheckoutMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleCheckout = async (e) => {
+    e.preventDefault();
+    setCheckoutError("");
+    setCheckoutMessage("");
+    setSubmitting(true);
+
+    try {
+      const result = await onCheckout({
+        full_name: fullName.trim(),
+        address: address.trim(),
+        payment_result: paymentResult,
+      });
+
+      setCheckoutMessage(`${result.message} Номер заказа: ${result.order_id}.`);
+
+      if (result.status === "paid") {
+        setFullName("");
+        setAddress("");
+      }
+    } catch (err) {
+      setCheckoutError(err.message || "Не удалось оформить заказ.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <main className="container cart-page">
@@ -605,13 +639,67 @@ function CartPage({
               <span>Итого</span>
               <strong>{formatPrice(cart.total)} ₽</strong>
             </div>
-            <button
-              type="button"
-              className="primary-btn full"
-              onClick={() => alert("Оформление заказа подключим следующим этапом.")}
-            >
-              Оформить заказ
-            </button>
+
+            {!isAuthenticated ? (
+              <p>
+                Чтобы оформить заказ, сначала <Link to="/profile">войдите в аккаунт</Link>.
+              </p>
+            ) : (
+              <form onSubmit={handleCheckout}>
+                <h3>Доставка</h3>
+
+                <label htmlFor="checkout-name">Имя получателя</label>
+                <input
+                  id="checkout-name"
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Ваше имя"
+                  maxLength={200}
+                  required
+                />
+
+                <label htmlFor="checkout-address">Адрес доставки</label>
+                <textarea
+                  id="checkout-address"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  placeholder="Город, улица, дом"
+                  maxLength={300}
+                  required
+                  rows={3}
+                />
+
+                <label htmlFor="payment-result">Результат демооплаты</label>
+                <select
+                  id="payment-result"
+                  value={paymentResult}
+                  onChange={(e) => setPaymentResult(e.target.value)}
+                >
+                  <option value="success">Успешная оплата</option>
+                  <option value="fail">Оплата не прошла</option>
+                </select>
+
+                <p>Это демонстрация: настоящие банковские данные не нужны.</p>
+
+                {checkoutError && (
+                  <p role="alert" style={{ color: "#d32f2f" }}>
+                    {checkoutError}
+                  </p>
+                )}
+
+                {checkoutMessage && (
+                  <p role="status" style={{ color: "#218838" }}>
+                    {checkoutMessage}
+                  </p>
+                )}
+
+                <button type="submit" className="primary-btn full" disabled={submitting}>
+                  {submitting ? "Оформляем..." : "Оформить заказ"}
+                </button>
+              </form>
+            )}
+
             <Link to="/catalog" className="more-link">
               Продолжить покупки
             </Link>
@@ -984,6 +1072,20 @@ export default function App() {
     }
   };
 
+  // Оформление заказа через Django API.
+  const checkout = async (orderData) => {
+    const result = await apiRequest("/checkout/", {
+      method: "POST",
+      body: JSON.stringify(orderData),
+    });
+
+    // После успешной демооплаты сервер очищает корзину.
+    const updatedCart = await apiRequest("/cart/");
+    setCart(updatedCart);
+
+    return result;
+  };
+
   return (
     <div className="app">
       <Header cartCount={isAuthenticated ? cart.count : 0} />
@@ -1030,6 +1132,7 @@ export default function App() {
               onChangeQuantity={changeCartQuantity}
               onRemoveItem={removeFromCart}
               busyItemId={busyItemId}
+              onCheckout={checkout}
             />
           }
         />

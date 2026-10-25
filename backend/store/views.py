@@ -214,3 +214,100 @@ class LogoutView(APIView):
             "message": "Вы вышли из аккаунта.",
             "is_authenticated": False,
         })
+
+
+from decimal import Decimal
+
+from django.db import transaction
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+from .models import Order, OrderItem
+
+
+class CheckoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        full_name = request.data.get("full_name", "").strip()
+        address = request.data.get("address", "").strip()
+        payment_result = request.data.get("payment_result", "success")
+
+        if not full_name or not address:
+            return Response(
+                {"detail": "Укажи имя и адрес доставки."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if payment_result not in ("success", "fail"):
+            return Response(
+                {"detail": "Некорректный результат оплаты."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cart = get_or_create_cart(request)
+        cart_items = list(
+            cart.items.select_related("product").all()
+        )
+
+        if not cart_items:
+            return Response(
+                {"detail": "Корзина пуста."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if any(
+            item.quantity < 1 or not item.product.is_active
+            for item in cart_items
+        ):
+            return Response(
+                {"detail": "В корзине есть недоступные товары."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        total = sum(
+            (item.product.price * item.quantity for item in cart_items),
+            Decimal("0.00"),
+        )
+
+        with transaction.atomic():
+            order = Order.objects.create(
+                user=request.user,
+                full_name=full_name,
+                address=address,
+                total=total,
+                status="pending",
+            )
+
+            OrderItem.objects.bulk_create([
+                OrderItem(
+                    order=order,
+                    product=item.product,
+                    product_title=item.product.title,
+                    price=item.product.price,
+                    quantity=item.quantity,
+                )
+                for item in cart_items
+            ])
+
+            if payment_result == "success":
+                order.status = "paid"
+                order.save(update_fields=["status"])
+                cart.items.all().delete()
+                message = "Демооплата прошла успешно!"
+            else:
+                order.status = "failed"
+                order.save(update_fields=["status"])
+                message = "Демооплата не прошла. Попробуй ещё раз."
+
+        return Response(
+            {
+                "order_id": order.id,
+                "status": order.status,
+                "total": str(order.total),
+                "message": message,
+            },
+            status=status.HTTP_201_CREATED,
+        )
